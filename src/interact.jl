@@ -1,30 +1,41 @@
 
 """
+    AbstractInteractOutput
+
 Abstract supertype of Interact outputs including `InteractOuput` and `ElectronOutput`
 """
 abstract type AbstractInteractOutput{T,F} <: ImageOutput{T,F} end
 
+const output_css = Asset(joinpath(@__DIR__, "..", "assets", "style.css"))
 
 """
-    InteractOutput(init; ruleset, fps=25.0, store=false,
-                   processor=ColorProcessor(), minval=nothing, maxval=nothing,
-                   extrainit=Dict())
+    InteractOutput <: AbstractInteractOutput
+
+    InteractOutput(init; ruleset, kw...)
 
 An `Output` for Atom/Juno and Jupyter notebooks,
 and the back-end for [`ElectronOutput`](@ref) and [`ServerOutput`](@ref).
 
+# Arguments:
 
-### Arguments:
-- `init`: initialisation Array or NamedTuple of arrays.
+- `init`: initialisation `Array` or `NamedTuple` of arrays.
 
-### Keyword Arguments:
-- `ruleset`: the ruleset to run in the interface simulations.
+# Keywords
+
+- `ruleset::Ruleset`: the ruleset to run in the interface simulations.
 - `tspan`: `AbstractRange` timespan for the simulation
-- `fps::Real`: frames per second to display the simulation
-- `store::Bool`: whether ot store the simulation frames for later use
-- `processor::GridProcessor
-- `minval::Number`: minimum value to display in the simulation
-- `maxval::Number`: maximum value to display in the simulation
+- `aux`: NamedTuple of arbitrary input data. Use `get(data, Aux(:key), I...)` 
+    to access from a `Rule` in a type-stable way.
+- `mask`: `BitArray` for defining cells that will/will not be run.
+- `padval`: padding value for grids with neighborhood rules. The default is `zero(eltype(init))`.
+- `font`: `String` font name, used in default `TextConfig`. A default will be guessed.
+- `text`: `TextConfig` object or `nothing` for no text.
+- `scheme`: ColorSchemes.jl scheme, or `Greyscale()`
+- `renderer`: `Renderer` such as `Image` or `Layout`
+- `minval`: minimum value(s) to set colour maximum
+- `maxval`: maximum values(s) to set colour minimum
+
+(See DynamicGrids.jl docs for more details)
 """
 mutable struct InteractOutput{T,F<:AbstractVector{T},E,GC,IC,RS<:Ruleset,Pa,IM,TI} <: AbstractInteractOutput{T,F}
     frames::F
@@ -40,29 +51,35 @@ end
 # Most defaults are passed in from the generic ImageOutput constructor
 function InteractOutput(; 
     frames, running, extent, graphicconfig, imageconfig, ruleset, 
-    extrainit=Dict(), throttle=0.1, interactive=true, grouped=true, kwargs...
+    extrainit=Dict(), throttle=0.1, interactive=true, kw...
 )
     # Observables that update during the simulation
     image_obs = Observable{Any}(dom"div"())
     t_obs = Observable{Int}(1)
 
     # Page and output construction
-    page = vbox()
+    page = Scope()
     output = InteractOutput(
-         frames, running, extent, graphicconfig, imageconfig, ruleset, page, image_obs, t_obs
+        frames, running, extent, graphicconfig, imageconfig, ruleset, page, image_obs, t_obs
     )
 
     # Widgets
     timedisplay = _time_text(t_obs)
     controls = _control_widgets(output, ruleset, extrainit)
-    sliders = _rule_sliders(ruleset, throttle, grouped, interactive)
+    sliders = _rule_sliders(ruleset, throttle, interactive)
 
     # Put it all together into a web page
-    output.page = vbox(hbox(output.image_obs), timedisplay, controls, sliders)
+    output.page = Scope(
+        imports=[output_css],
+        dom=vbox(
+            dom"div.resizable"(output.image_obs; title="Drag bottom right to resize"), 
+            timedisplay, 
+            controls, 
+            sliders
+        ),
+    )
 
-    # Initialise image Observable
-    simdata = DynamicGrids.SimData(extent, ruleset)
-    # image_obs[] = _webimage(DG.grid2image(output, simdata)
+    # Initialise image Observable simdata = DynamicGrids.SimData(extent, ruleset) image_obs[] = _webimage(DG.render!(output, simdata))
 
     return output
 end
@@ -97,9 +114,9 @@ function _time_text(t_obs::Observable)
     return timedisplay
 end
 
-function _rule_sliders(ruleset, throttle, grouped, interactive)
+function _rule_sliders(ruleset, throttle, interactive)
     if interactive 
-        return InteractModels.attach_sliders!(ruleset; throttle=throttle, grouped=grouped) 
+        return InteractModels.attach_sliders!(ruleset; throttle=throttle, submodel=Rule) 
     else
         return dom"div"()
     end
